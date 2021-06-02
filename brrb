@@ -1,0 +1,259 @@
+#!/bin/bash
+#
+# Copyright (C) 2021 Stonyx
+# http://www.stonyx.com
+#
+# This script is free software. You can redistribute it and/or modify it under the terms of the GNU
+# General Public License Version 3 (or at your option any later version) as published by The Free
+# Software Foundation.
+#
+# This script is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+# even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# If you did not received a copy of the GNU General Public License along with this script see
+# http://www.gnu.org/copyleft/gpl.html or write to The Free Software Foundation, 675 Mass Ave,
+# Cambridge, MA 02139, USA.
+
+# Create a function called to check if a needed command is available
+function is_available()
+{
+  if ! command -v "$1" > /dev/null
+  then
+    echo "Command $1 is required but is not available."
+    exit 1
+  fi
+}
+
+# Create a function called to perform the backup with no dependees
+function perform_backup
+{
+  # Save passed in variables
+  local device="$1"
+  local location="$2"
+  local compression_level="$3"
+  local compression_threads="$4"
+
+  # Get the device name from the device
+  declare device_name="${device##*/}"
+
+  # Create the backup
+  bash -c "./ddinc -b \"$device\" \
+    -o \"$location/$device_name.dd.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
+    -c -x \"-$compression_level -T $compression_threads\" -a"
+
+  echo "$location/$device_name.dd.xz"
+}
+
+# Create a function called to perform the backup with one dependee
+function perform_backup_with_dependee
+{
+  # Save passed in variables
+  local device="$1"
+  local location="$2"
+  local dependee_location="$3"
+  local compression_level="$4"
+  local compression_threads="$5"
+
+  # Get the device name from the device
+  declare device_name="${device##*/}"
+
+  # Create the backup
+  bash -c "./ddinc -i \"$dependee_location/$device_name.dd.xz\" -b \"$device\" \
+    -o \"$location/$device_name.dd.xdelta.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
+    -c -x \"-$compression_level -T $compression_threads\" -a"
+
+  # Convert the dependee location path into a path relative to the backup location and save it to
+  # the new dependee file
+  realpath --no-symlinks --relative-to="$location" \
+    "$dependee_location/$device_name.dd.xz" > "$location/$device_name.dd.depndees"
+
+  echo "$location/$device_name.dd.xdelta.xz"
+}
+
+# Create a function called to perform the backup with multiple dependees
+function perform_backup_with_dependees
+{
+  # Save passed in variables
+  local device="$1"
+  local location="$2"
+  local dependee_location="$3"
+  local compression_level="$4"
+  local compression_threads="$5"
+
+  # Get the device name from the device
+  declare device_name="${device##*/}"
+
+  # Create the backup
+  bash -c "./ddinc -f \"$dependee_location/$device_name.dd.dependees\" \
+    -i \"$dependee_location/$device_name.dd.xdelta.xz\" -b \"$device\" \
+    -o \"$location/$device_name.dd.xdelta.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
+    -c -x \"-$compression_level -T $compression_threads\" -a"
+
+  # Copy the contents of the existing depenee file into the new depenee file
+  echo "$(< \"$dependee_location/$device_name.dd.dependees\")" > \
+    "$location/$device_name.dd.dependees"
+
+  # Convert the dependee location path into a path relative to the backup location and save it to
+  # the new dependee file
+  realpath --no-symlinks --relative-to="$location" \
+    "$dependee_location/$device_name.dd.xdelta.xz" >> "$location/$device_name.dd.depndees"
+
+  echo "$location/$device_name.dd.xdelta.xz"
+}
+
+# Check if the needed commands are available
+is_available "realpath"
+is_available "par2"
+
+# Declare options variables
+declare -a backup_devices
+declare -a restore_devices
+declare location
+declare dependee_location
+declare -i compression_level=1
+declare -i compression_threads=8
+
+# Get the options
+while getopts "b:r:l:d:c:t:h" option
+do
+  case $option in
+    b)
+      backup_devices+=("$OPTARG")
+      ;;
+    r)
+      restore_devices+=("$OPTARG")
+      ;;
+    l)
+      location=("$OPTARG")
+      ;;
+    d)
+      dependee_location=("$OPTARG")
+      ;;
+    c)
+      compression_level=("$OPTARG")
+      ;;
+    t)
+      compression_threads=("$OPTARG")
+      ;;
+    h)
+      echo "Usage: brrb (-b device | -r device) -l location [-d dependee_location]" \
+           "[-c compression_level] [-t compression_threads]"
+      echo
+      echo "-b   device to backup (can be specified multiple times)"
+      echo "-r   device to restore (can be specified multiple times)"
+      echo "-l   backup location"
+      echo "-d   backup dependee location"
+      echo "-c   compression level (default is 1)"
+      echo "-t   number of threads to use for compression (default is 8)"
+      echo
+      echo "Backup example"
+      echo "brrb -b /dev/sda -b /dev/sdb -l ./backup/february -d ./backup/january"
+      echo
+      echo "Restore example"
+      echo "brrb -r /dev/sda -r /dev/sdb -l ./backup/february"
+
+      exit 0
+      ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# Verify the options
+
+# Check if there are devices to backup
+if [[ ${#backup_devices[@]} -ne 0 ]]
+then
+  # Update the user
+  echo "Computing device hashes ..."
+
+  # Compute the device hashes in parallel and store them in an array
+  declare -a device_hashes
+  mapfile -t device_hashes < <(
+    for device in "${backup_devices[@]}"
+    do
+      # Run the hash comand
+      sha1sum $device &
+    done
+  )
+
+  # Convert the device hashes array into an associative array (a.k.a. map)
+  declare -A device_hash_map
+  for device_hash in "${device_hashes[@]}"
+  do
+    device_hash_map["${device_hash##* }"]="${device_hash%% *}"
+  done
+
+  # Loop through the backup devices and save to file and print the corresponding hash
+  for device in "${backup_devices[@]}"
+  do
+    echo "${device_hash_map[$device]}" > "$location/${device##*/}.dd.sha1"
+    echo "SHA1 hash for $device device is: ${device_hash_map[$device]}"
+  done
+
+  # Make things pretty
+  echo
+
+  # Declare needed variables
+  declare -A device_backup_file_map
+  declare -A backup_file_hash_map
+
+  # Loop through the backup devices
+  for device in "${backup_devices[@]}"
+  do
+    # Update the user
+    echo "Backing up $device ..."
+
+    # Check if there is no dependee for this backup
+    if [[ -z $dependee ]]
+    then
+      # Perform the backup and save the backup file to an associative array
+      device_backup_file_map["$device"]="$(perform_backup "$device" "$location" \
+        "$compression_level" "$compression_threads")"
+    else
+      # Check if there is no dependee file in the backup dependee location which means there is
+      # only one dependee
+      if [[ ! -e "$dependee_location/$device_name.dd.dependees" ]]
+      then
+        # Perform the backup and save the backup file to an associative array
+        device_backup_file_map["$device"]="$(perform_backup_with_dependee "$device" "$location" \
+          "$dependee_location" "$compression_level" "$compression_threads")"
+      else
+        # Perform the backup and save the backup file to an associative array
+        device_backup_file_map["$device"]="$(perform_backup_with_dependees "$device" "$location" \
+          "$dependee_location" "$compression_level" "$compression_threads")"
+      fi
+    fi
+
+    # Update the user
+    echo "Computing backup file hash ..."
+
+    # Compute the backup file hash and save it in an associative array (a.k.a. map)
+    declare backup_file_hash="$(sha1sum "${device_backup_file_map["$device"]}")"
+    backup_file_hash_map["${backup_file_hash##* }"]="${backup_file_hash%% *}"
+
+    # Save to file the backup file hash
+    echo "${backup_file_hash_map["${device_backup_file_map["$device"]}"]}" > 
+      "${device_backup_file_map["$device"]}.sha1"
+
+    # Print the backup file hash
+    echo "SHA1 hash for $backup_file backup file is:" \
+      "${backup_file_hash_map["${device_backup_file_map["$device"]}"]}"
+  done
+
+  # Loop through the devices
+  for device in "${backup_devices[@]}"
+  do
+    # Create the par2 file
+  done
+
+  # Loop through the backup devices and verify the backups
+  #for device in "${backup_devices[@]}"
+  #do
+  #done
+#else
+  # Loop throught the restore devices array
+  #for device in "${restore_devices[@]}"
+  #do
+  #done
+fi
