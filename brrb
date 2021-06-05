@@ -26,96 +26,180 @@ function is_available()
 }
 
 # Create a function called to perform the backup with no dependees
-function perform_backup
+function perform_backup()
 {
   # Save passed in variables
   local device="$1"
   local location="$2"
   local compression_level="$3"
-  local compression_threads="$4"
 
   # Get the device name from the device
-  declare device_name="${device##*/}"
+  local device_name="${device##*/}"
 
-  # Create the backup
-  bash -c "./ddinc -b \"$device\" \
-    -o \"$location/$device_name.dd.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
-    -c -x \"-$compression_level -T $compression_threads\" -a"
+  # TODO: check how different bs settings impact performance
 
-  echo "$location/$device_name.dd.xz"
+  # Perform the backup
+  ./ddinc -b "$device" -o "$location/$device_name.dd.xz" \
+    -d "bs=256M iflag=fullblock status=progress" -c -x "-$compression_level -T 0" -a
+
+  # Check if performing the backup failed
+  if [[ $? -eq 1 ]]
+  then
+    # Return an empty string
+    echo -n ""
+    return 1
+  fi
+
+  # Return the path to the backup file
+  echo -n "$location/$device_name.dd.xz"
+  return 0
 }
 
-# Create a function called to perform the backup with one dependee
-function perform_backup_with_dependee
+# Create a function called to perform the backup with dependees
+function perform_backup_with_dependees()
 {
   # Save passed in variables
   local device="$1"
   local location="$2"
   local dependee_location="$3"
   local compression_level="$4"
-  local compression_threads="$5"
 
   # Get the device name from the device
-  declare device_name="${device##*/}"
+  local device_name="${device##*/}"
 
-  # Create the backup
-  bash -c "./ddinc -i \"$dependee_location/$device_name.dd.xz\" -b \"$device\" \
-    -o \"$location/$device_name.dd.xdelta.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
-    -c -x \"-$compression_level -T $compression_threads\" -a"
+  # Check if a dependees file exists in the backup dependee location
+  if [[ ! -e "$dependee_location/$device_name.dd.dependees" ]]
+  then
+    # TODO: check how different bs settings impact performance
 
-  # Convert the dependee location path into a path relative to the backup location and save it to
-  # the new dependee file
-  realpath --no-symlinks --relative-to="$location" \
-    "$dependee_location/$device_name.dd.xz" > "$location/$device_name.dd.depndees"
+    # Perform the backup
+    # Note: since data on devices usually doesn't move only a few megabytes from it's original
+    #       location we are using the smallest possible source window size (which determines how
+    #       much the data can shift and still be considered the same) along with disabling
+    #       compression, secondary compression, and small string matching compression to
+    #       significantly improve the speed of xdelta3
+    ./ddinc -i "$dependee_location/$device_name.dd.xz" -b "$device" \
+      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" \
+      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0" -a
 
-  echo "$location/$device_name.dd.xdelta.xz"
+    # Check if performing the backup failed
+    if [[ $? -eq 1 ]]
+    then
+      # Return an empty string
+      echo -n ""
+      return 1
+    fi
+
+    # Convert the dependee location path into a path relative to the backup location and save it to
+    #   the new dependee file
+    realpath --no-symlinks --relative-to="$location" \
+      "$dependee_location/$device_name.dd.xz" > "$location/$device_name.dd.dependees"
+  else
+    # TODO: check how different bs settings impact performance
+
+    # Perform the backup
+    # Note: since data on devices usually doesn't move only a few megabytes from it's original
+    #       location we are using the smallest possible source window size (which determines how
+    #       much the data can shift and still be considered the same) along with disabling
+    #       compression, secondary compression, and small string matching compression to
+    #       significantly improve the speed of xdelta3
+    ./ddinc -f "$dependee_location/$device_name.dd.dependees" \
+      -i "$dependee_location/$device_name.dd.xdelta3.xz" -b "$device" \
+      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" \
+      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0" -a
+
+    # Check if performing the backup failed
+    if [[ $? -eq 1 ]]
+    then
+      # Return an empty string
+      echo -n ""
+      return 1
+    fi
+
+    # Copy the contents of the existing depenee file into the new depenee file
+    echo "$(< "$dependee_location/$device_name.dd.dependees")" > \
+      "$location/$device_name.dd.dependees"
+
+    # Convert the dependee location path into a path relative to the backup location and save it to
+    #   the new dependee file
+    realpath --no-symlinks --relative-to="$location" \
+      "$dependee_location/$device_name.dd.xdelta3.xz" >> "$location/$device_name.dd.dependees"
+  fi
+
+  # Return the path to the backup file
+  echo "$location/$device_name.dd.xdelta3.xz"
+  return 0
 }
 
-# Create a function called to perform the backup with multiple dependees
-function perform_backup_with_dependees
+# Create a function called to verify the backup with no dependees
+function verify_backup()
 {
   # Save passed in variables
   local device="$1"
   local location="$2"
-  local dependee_location="$3"
-  local compression_level="$4"
-  local compression_threads="$5"
 
   # Get the device name from the device
-  declare device_name="${device##*/}"
+  local device_name="${device##*/}"
 
-  # Create the backup
-  bash -c "./ddinc -f \"$dependee_location/$device_name.dd.dependees\" \
-    -i \"$dependee_location/$device_name.dd.xdelta.xz\" -b \"$device\" \
-    -o \"$location/$device_name.dd.xdelta.xz\" -d \"bs=256M iflag=fullblock status=progress\" \
-    -c -x \"-$compression_level -T $compression_threads\" -a"
+  # TODO: check how different bs settings impact performance
 
-  # Copy the contents of the existing depenee file into the new depenee file
-  echo "$(< \"$dependee_location/$device_name.dd.dependees\")" > \
-    "$location/$device_name.dd.dependees"
+  # Perform a restore and pipe it to the hash command
+  local hash="$(./ddinc -r "$location/$device_name.dd.xz" \
+    -d "bs=256M iflag=fullblock status=progress" -c | sha1sum -z)"
 
-  # Convert the dependee location path into a path relative to the backup location and save it to
-  # the new dependee file
-  realpath --no-symlinks --relative-to="$location" \
-    "$dependee_location/$device_name.dd.xdelta.xz" >> "$location/$device_name.dd.depndees"
+  # Check if verifying the backup failed
+  if [[ $? -eq 1 ]]
+  then
+    # Return an empty string
+    echo -n ""
+    return 1
+  fi
 
-  echo "$location/$device_name.dd.xdelta.xz"
+  # Return just the hash of the restored backup
+  echo -n "${hash%% *}"
+  return 0
 }
 
-# Check if the needed commands are available
-is_available "realpath"
-is_available "par2"
+# Create a function called to verify the backup with dependees
+function verify_backup_with_dependees()
+{
+  # Save passed in variables
+  local device="$1"
+  local location="$2"
+
+  # Get the device name from the device
+  local device_name="${device##*/}"
+
+  # TODO: check how different bs settings impact performance
+
+  # Perform a restore and pipe it to the hash command
+  local hash="$(./ddinc -f "$location/$device_name.dd.dependees" \
+    -r "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" -c | \
+    sha1sum -z)"
+  
+  # Check if verifying the backup failed
+  if [[ $? -eq 1 ]]
+  then
+    # Return an empty string
+    echo -n ""
+    return 1
+  fi
+
+  # Return just the hash of the restored backup
+  echo "${hash%% *}"
+  return 0
+}
 
 # Declare options variables
 declare -a backup_devices
 declare -a restore_devices
 declare location
 declare dependee_location
-declare -i compression_level=1
-declare -i compression_threads=8
+declare -i compression_level=0
+declare -i fast_mode=0
 
 # Get the options
-while getopts "b:r:l:d:c:t:h" option
+while getopts "b:r:l:d:0123456789fh" option
 do
   case $option in
     b)
@@ -125,27 +209,27 @@ do
       restore_devices+=("$OPTARG")
       ;;
     l)
-      location=("$OPTARG")
+      location="${OPTARG%/}"
       ;;
     d)
-      dependee_location=("$OPTARG")
+      dependee_location="${OPTARG%/}"
       ;;
-    c)
-      compression_level=("$OPTARG")
+    [0-9])
+      compression_level=$option
       ;;
-    t)
-      compression_threads=("$OPTARG")
+    f)
+      fast_mode="$OPTARG"
       ;;
     h)
       echo "Usage: brrb (-b device | -r device) -l location [-d dependee_location]" \
-           "[-c compression_level] [-t compression_threads]"
+           "[-0..9] [-f]"
       echo
-      echo "-b   device to backup (can be specified multiple times)"
-      echo "-r   device to restore (can be specified multiple times)"
-      echo "-l   backup location"
-      echo "-d   backup dependee location"
-      echo "-c   compression level (default is 1)"
-      echo "-t   number of threads to use for compression (default is 8)"
+      echo "-b    device to backup (can be specified multiple times)"
+      echo "-r    device to restore (can be specified multiple times)"
+      echo "-l    backup location"
+      echo "-d    backup dependee location"
+      echo "-0..9 compression level (default is 0)"
+      echo "-f    fast mode that skips re-computing hashes"
       echo
       echo "Backup example"
       echo "brrb -b /dev/sda -b /dev/sdb -l ./backup/february -d ./backup/january"
@@ -159,98 +243,276 @@ do
 done
 shift $((OPTIND - 1))
 
-# Verify the options
+# Check if the needed commands are available
+is_available "mv"
+is_available "realpath"
+is_available "rm"
+is_available "par2"
+is_available "sha1sum"
+
+# Make sure a backup device or a restore device was specified and not both
+if [[ ${#backup_devices[@]} -eq 0 && ${#restore_devices[@]} -eq 0 ]]
+then
+  echo "No backup devices or restore devices were specified.  See help (-h) for details."
+  exit 1
+fi
+if [[ ${#backup_devices[@]} -ne 0 && ${#restore_devices[@]} -ne 0 ]]
+then
+  echo "Both backup and restore devices were specified.  See help (-h) for details."
+  exit 1
+fi
+
+# Make sure a location was specified
+if [[ -z "$location" ]]
+then
+  echo "No backup location was specified.  See help (-h) for details."
+  exit 1
+fi
 
 # Check if there are devices to backup
 if [[ ${#backup_devices[@]} -ne 0 ]]
 then
+  # Declare needed variables
+  declare device_name
+
+  # Loop through the devices and check if any files that will be written to exist
+  for device in "${backup_devices[@]}"
+  do
+    # Get the device name from the device
+    device_name="${device##*/}"
+
+    # Check if any files that will be written to exist
+    if [[ -e "$location/$device_name.dd.sha1" || \
+      (-z "$dependee_location" && (-e "$location/$device_name.dd.xz" || \
+      -e "$location/$device_name.dd.xz.sha1" || \
+      -e "$location/$device_name.dd.xz.par2" || \
+      -e "$location/$device_name.dd.xz.vol00+50.par2")) || \
+      (-n "$dependee_location" && (-e "$location/$device_name.dd.xdelta3.xz" ||  \
+      -e "$location/$device_name.dd.xdelta3.xz.sha1" || \
+      -e "$location/$device_name.dd.xdelta3.xz.par2" || \
+      -e "$location/$device_name.dd.xdelta3.xz.vol00+50.par2")) ]]
+    then
+      echo "One or more backup files already exist in the specified backup location."
+      exit 1
+    fi
+  done
+
+  # Declare needed variables
+  declare hash
+
   # Update the user
   echo "Computing device hashes ..."
 
-  # Compute the device hashes in parallel and store them in an array
-  declare -a device_hashes
-  mapfile -t device_hashes < <(
-    for device in "${backup_devices[@]}"
-    do
-      # Run the hash comand
-      sha1sum $device &
-    done
-  )
-
-  # Convert the device hashes array into an associative array (a.k.a. map)
-  declare -A device_hash_map
-  for device_hash in "${device_hashes[@]}"
-  do
-    device_hash_map["${device_hash##* }"]="${device_hash%% *}"
-  done
-
-  # Loop through the backup devices and save to file and print the corresponding hash
+  # Loop through the backup devices and compute the device hashes
+  # Note: we want to write the hash to a file as soon as it is computed therefore we don't store
+  #       it in an array first like when we re-compute the device hashes at the end
   for device in "${backup_devices[@]}"
   do
-    echo "${device_hash_map[$device]}" > "$location/${device##*/}.dd.sha1"
-    echo "SHA1 hash for $device device is: ${device_hash_map[$device]}"
+    # Asynchronously run the following commands
+    {
+      # Compute the device hash by running the hash command
+      hash="$(sha1sum -z "$device")"
+
+      # Write just the hash to a file
+      echo -n "${hash%% *}" > "$location/${device##*/}.dd.sha1"
+    } &
+  done
+
+  # Wait for all asynchronous hash commands to finish
+  wait
+
+  # Loop through the backup devices and print the device hashes
+  for device in "${backup_devices[@]}"
+  do
+    # Print the device hash by retrieving it from the file
+    echo "SHA1 hash for \"$device\" device is"
+    echo "$(< "$location/${device##*/}.dd.sha1")"
+  done
+
+  # Declare needed variables
+  declare -A device_backup_file_map
+
+  # Loop through the backup devices and perform the backups
+  for device in "${backup_devices[@]}"
+  do
+    # Make things pretty
+    echo
+ 
+    # Update the user
+    echo "Backing up \"$device\" device ..."
+
+    # Check if there is no dependee for this backup
+    if [[ -z "$dependee_location" ]]
+    then
+      # Perform the backup with no dependee and save the returned backup file path to the device
+      #   backup file map
+      device_backup_file_map["$device"]="$(perform_backup "$device" "$location" \
+        "$compression_level")"
+    else
+      # Perform the backup with dependees and save the returned backup file path to the device
+      #   backup file map
+      device_backup_file_map["$device"]="$(perform_backup_with_dependees "$device" "$location" \
+        "$dependee_location" "$compression_level")"
+    fi
+
+    # Check if the backup failed
+    if [[ $? -eq 1 ]]
+    then
+      echo "An error has occurred performing the backup."
+      exit 1
+    fi
+
+    # Make things pretty
+    echo
+
+    # Update the user
+    echo "Computing \"${device_backup_file_map["$device"]}\" backup file hash ..."
+
+    # Compute the backup file hash by running the hash command
+    hash="$(sha1sum -z "${device_backup_file_map["$device"]}")"
+
+    # Write just the hash to a file
+    echo -n "${hash%% *}" > "${device_backup_file_map["$device"]}.sha1"
+
+    # Print the backup file hash by retrieving it from the file
+    echo "SHA1 hash for \"${device_backup_file_map["$device"]}\" backup file is"
+    echo "$(< "${device_backup_file_map["$device"]}.sha1")"
   done
 
   # Make things pretty
   echo
 
-  # Declare needed variables
-  declare -A device_backup_file_map
-  declare -A backup_file_hash_map
-
-  # Loop through the backup devices
+  # Loop through the devices and generate par2 files
   for device in "${backup_devices[@]}"
   do
     # Update the user
-    echo "Backing up $device ..."
+    echo "Generating par2 file for \"${device_backup_file_map["$device"]}\" backup file ..."
 
-    # Check if there is no dependee for this backup
-    if [[ -z $dependee ]]
-    then
-      # Perform the backup and save the backup file to an associative array
-      device_backup_file_map["$device"]="$(perform_backup "$device" "$location" \
-        "$compression_level" "$compression_threads")"
-    else
-      # Check if there is no dependee file in the backup dependee location which means there is
-      # only one dependee
-      if [[ ! -e "$dependee_location/$device_name.dd.dependees" ]]
-      then
-        # Perform the backup and save the backup file to an associative array
-        device_backup_file_map["$device"]="$(perform_backup_with_dependee "$device" "$location" \
-          "$dependee_location" "$compression_level" "$compression_threads")"
-      else
-        # Perform the backup and save the backup file to an associative array
-        device_backup_file_map["$device"]="$(perform_backup_with_dependees "$device" "$location" \
-          "$dependee_location" "$compression_level" "$compression_threads")"
-      fi
-    fi
+    # Generate the par2 file
+    # TODO: check if $location will work with par2 if it's . or ..
+    par2 create -b1000 -c50 -n1 -B"$location" "${device_backup_file_map["$device"]}.par2" \
+      "${device_backup_file_map["$device"]}"
 
-    # Update the user
-    echo "Computing backup file hash ..."
+    # Delete unnecessary par2 index file
+    rm "${device_backup_file_map["$device"]}.par2"
 
-    # Compute the backup file hash and save it in an associative array (a.k.a. map)
-    declare backup_file_hash="$(sha1sum "${device_backup_file_map["$device"]}")"
-    backup_file_hash_map["${backup_file_hash##* }"]="${backup_file_hash%% *}"
-
-    # Save to file the backup file hash
-    echo "${backup_file_hash_map["${device_backup_file_map["$device"]}"]}" > 
-      "${device_backup_file_map["$device"]}.sha1"
-
-    # Print the backup file hash
-    echo "SHA1 hash for $backup_file backup file is:" \
-      "${backup_file_hash_map["${device_backup_file_map["$device"]}"]}"
+    # Rename actual par2 file
+    mv "${device_backup_file_map["$device"]}.vol00+50.par2" "${device_backup_file_map["$device"]}.par2"
   done
 
-  # Loop through the devices
-  for device in "${backup_devices[@]}"
-  do
-    # Create the par2 file
-  done
+  # Make things pretty
+  echo
 
   # Loop through the backup devices and verify the backups
-  #for device in "${backup_devices[@]}"
-  #do
-  #done
+  for device in "${backup_devices[@]}"
+  do
+    # Update the user
+    echo "Verifying \"${device_backup_file_map["$device"]}\" backup file containing \"$device\"" \
+      "device backup ..."
+
+    # Check if there is no dependee
+    if [[ -z "$dependee_location" ]]
+    then
+      # Verify the backup with no dependee and save the returned hash
+      hash="$(verify_backup "$device" "$location")"
+    else
+      # Verify the backup with dependees and save the returned hash
+      hash="$(verify_backup_with_dependees "$device" "$location")"
+    fi
+
+    # Check if verifying the backup failed
+    if [[ $? -eq 1 ]]
+    then
+      echo "An error has occurred verifying the backup."
+      exit 1
+    fi
+
+    # Make things pretty
+    echo
+
+    # Print the verification hash
+    echo "SHA1 hash for the restored content of \"${device_backup_file_map["$device"]}\"" \
+      "backup file is"
+    echo "$hash"
+
+    # Check if the verification hash matches the device hash
+    if [[ "$hash" == "$(< "$location/${device##*/}.dd.sha1")" ]]
+    then
+      echo "which matches the \"$device\" device hash."
+    else
+      echo "which does NOT match the \"$device\" device hash.  An error has occurred."
+      exit 1
+    fi
+  done
+
+  # Check if fast mode is disabled
+  if [[ $fast_mode -eq 0 ]]
+  then
+    # Make things pretty
+    echo
+
+    # Loop through the backup devices and compute the backup file hashes
+    for device in "${backup_devices[@]}"
+    do
+      # Update the user
+      echo "Re-computing \"${device_backup_file_map["$device"]}\" backup file hash ..."
+
+      # Compute the backup file hash by running the hash command and keep just the hash
+      hash="$(sha1sum -z "${device_backup_file_map["$device"]}")"
+      hash="${hash%% *}"
+
+      # Print the hash
+      echo "SHA1 hash for \"${device_backup_file_map["$device"]}\" backup file is"
+      echo "$hash"
+
+      # Check if the hash still matches
+      if [[ "$hash" == "$(< "${device_backup_file_map["$device"]}.sha1")" ]]
+      then
+        echo "which matches the original hash."
+      else
+        echo "which does NOT match the original hash.  An error has occurred."
+      fi
+    done
+
+    # Make things pretty
+    echo
+
+    # Update the user
+    echo "Re-computing device hashes ..."
+
+    # Asynchronously compute the device hashes and store them in an array
+    declare -a device_hashes
+    readarray -t device_hashes < <(
+      for device in "${backup_devices[@]}"
+      do
+        # Run the hash comand
+        sha1sum -z $device &
+      done
+    )
+
+    # Convert the device hashes array into an associative array (a.k.a. map)
+    declare -A device_hash_map
+    for device_hash in "${device_hashes[@]}"
+    do
+      device_hash_map["${device_hash##* }"]="${device_hash%% *}"
+    done
+
+    # Loop through the devices and check if the device hashes still match
+    for device in "${backup_devices[@]}"
+    do    
+      # Print the hash
+      echo "SHA1 hash for \"$device\" device is"
+      echo "${device_hash_map["$device"]}"
+
+      # Check if the hash still matches
+      if [[ "${device_hash_map["$device"]}" == "$(< "$location/${device##*/}.dd.sha1")" ]]
+      then
+        echo "which matches the original hash."
+      else
+        echo "which does NOT match the original hash.  An error has occurred."
+      fi
+    done
+  fi
 #else
   # Loop throught the restore devices array
   #for device in "${restore_devices[@]}"
