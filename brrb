@@ -51,17 +51,13 @@ function perform_backup()
   # Get the device name from the device
   local device_name="${device##*/}"
 
-  # TODO: check how different bs settings impact performance
-
   # Perform the backup
   ./ddinc -b "$device" -o "$location/$device_name.dd.xz" \
-    -d "bs=256M iflag=fullblock status=progress" -c -x "-$compression_level -T 0" -a
+    -d "bs=1M iflag=fullblock status=progress" -c -x "-$compression_level -T 0"
 
   # Check if performing the backup failed
   if (( $? != 0 ))
   then
-    # Return an empty string
-    # echo -n ""
     return 1
   fi
 
@@ -85,8 +81,6 @@ function perform_backup_with_dependees()
   # Check if a dependees file exists in the backup dependee location
   if [[ ! -e "$dependee_location/$device_name.dd.dependees" ]]
   then
-    # TODO: check how different bs settings impact performance
-
     # Perform the backup
     # Note: since data on devices usually doesn't move only a few megabytes from it's original
     #       location we are using the smallest possible source window size (which determines how
@@ -94,14 +88,12 @@ function perform_backup_with_dependees()
     #       compression, secondary compression, and small string matching compression to
     #       significantly improve the speed of xdelta3
     ./ddinc -i "$dependee_location/$device_name.dd.xz" -b "$device" \
-      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" \
-      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0" -a
+      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" \
+      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0"
 
     # Check if performing the backup failed
     if (( $? != 0 ))
     then
-      # Return an empty string
-      # echo -n ""
       return 1
     fi
 
@@ -120,14 +112,12 @@ function perform_backup_with_dependees()
     #       significantly improve the speed of xdelta3
     ./ddinc -f "$dependee_location/$device_name.dd.dependees" \
       -i "$dependee_location/$device_name.dd.xdelta3.xz" -b "$device" \
-      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" \
-      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0" -a
+      -o "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" \
+      -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0"
 
     # Check if performing the backup failed
     if (( $? != 0 ))
     then
-      # Return an empty string
-      # echo -n ""
       return 1
     fi
 
@@ -156,20 +146,19 @@ function verify_backup()
   # Get the device name from the device
   local device_name="${device##*/}"
 
-  # TODO: check how different bs settings impact performance
-
   # Perform a restore and pipe it to the hash command
+  # Note: the command after the semi colon is an if statement that checks if the exit codes from
+  #       both commands involved in the pipe are 0 and it's this command's exit code that is
+  #       checked afterwards
   local hash="$(./ddinc -r "$location/$device_name.dd.xz" \
-    -d "bs=256M iflag=fullblock status=progress" -c | sha1sum)"
+    -d "bs=1M iflag=fullblock status=progress" -c | sha1sum; [[ "\${PIPESTATUS[@]}" == "0 0" ]])"
 
   # Check if verifying the backup failed
   if (( $? != 0 ))
   then
-    # Return an empty string
-    # echo -n ""
     return 1
   fi
-
+  
   # Return just the hash of the restored backup
   echo -n "${hash%% *}"
   return 0
@@ -185,18 +174,17 @@ function verify_backup_with_dependees()
   # Get the device name from the device
   local device_name="${device##*/}"
 
-  # TODO: check how different bs settings impact performance
-
   # Perform a restore and pipe it to the hash command
+  # Note: the command after the semi colon is an if statement that checks if the exit codes from
+  #       both commands involved in the pipe are 0 and it's this command's exit code that is
+  #       checked afterwards
   local hash="$(./ddinc -f "$location/$device_name.dd.dependees" \
-    -r "$location/$device_name.dd.xdelta3.xz" -d "bs=256M iflag=fullblock status=progress" -c | \
-    sha1sum)"
+    -r "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" -c | \
+    sha1sum; [[ "\${PIPESTATUS[@]}" == "0 0" ]])"
   
   # Check if verifying the backup failed
   if (( $? != 0 ))
   then
-    # Return an empty string
-    # echo -n ""
     return 1
   fi
 
@@ -237,20 +225,20 @@ do
       ;;
     h)
       echo "Usage: brrb (-b device | -r device) -l location [-d dependee_location]" \
-           "[-0..9] [-f]" >&2
-      echo >&2
-      echo "-b    device to backup (can be specified multiple times)" >&2
-      echo "-r    device to restore (can be specified multiple times)" >&2
-      echo "-l    backup location" >&2
-      echo "-d    backup dependee location" >&2
-      echo "-0..9 compression level (default is 0)" >&2
-      echo "-f    fast mode that skips re-computing hashes" >&2
-      echo >&2
-      echo "Backup example" >&2
-      echo "brrb -b /dev/sda -b /dev/sdb -l ./backup/february -d ./backup/january" >&2
-      echo >&2
-      echo "Restore example" >&2
-      echo "brrb -r /dev/sda -r /dev/sdb -l ./backup/february" >&2
+           "[-0..9] [-f]"
+      echo
+      echo "-b    device to backup (can be specified multiple times)"
+      echo "-r    device to restore (can be specified multiple times)"
+      echo "-l    backup location"
+      echo "-d    backup dependee location"
+      echo "-0..9 compression level (default is 0)"
+      echo "-f    fast mode that skips re-computing hashes"
+      echo
+      echo "Backup example"
+      echo "brrb -b /dev/sda -b /dev/sdb -l ./backup/february -d ./backup/january"
+      echo
+      echo "Restore example"
+      echo "brrb -r /dev/sda -r /dev/sdb -l ./backup/february"
 
       exit 0
       ;;
@@ -285,7 +273,7 @@ then
 fi
 
 # Check if there are devices to backup
-if [[ ${#backup_devices[@]} -ne 0 ]]
+if (( ${#backup_devices[@]} != 0 ))
 then
   # Declare needed variables
   declare device_name
@@ -327,6 +315,7 @@ then
     {
       # Compute the device hash by running the hash command
       hash="$(sha1sum "$device")"
+      check_if_successful "sha1sum" $?
 
       # Write just the hash to a file
       echo -n "${hash%% *}" > "$location/${device##*/}.dd.sha1"
@@ -370,7 +359,7 @@ then
         "$dependee_location" "$compression_level")"
     fi
 
-    # Check if the backup failed
+    # Check if performing the backup failed
     if (( $? != 0 ))
     then
       echo "An error has occurred performing the backup." >&2
@@ -385,6 +374,7 @@ then
 
     # Compute the backup file hash by running the hash command
     hash="$(sha1sum "${device_backup_file_map["$device"]}")"
+    check_if_successful "sha1sum" $?
 
     # Write just the hash to a file
     echo -n "${hash%% *}" > "${device_backup_file_map["$device"]}.sha1"
@@ -394,12 +384,12 @@ then
     echo "$(< "${device_backup_file_map["$device"]}.sha1")"
   done
 
-  # Make things pretty
-  echo
-
   # Loop through the devices and generate par2 files
   for device in "${backup_devices[@]}"
   do
+    # Make things pretty
+    echo
+
     # Update the user
     echo "Generating par2 file for \"${device_backup_file_map["$device"]}\" backup file ..."
 
@@ -407,6 +397,7 @@ then
     # TODO: check if $location will work with par2 if it's . or ..
     par2 create -b1000 -c50 -n1 -B"$location" "${device_backup_file_map["$device"]}.par2" \
       "${device_backup_file_map["$device"]}"
+    check_if_successful "par2" $?
 
     # Delete unnecessary par2 index file
     rm "${device_backup_file_map["$device"]}.par2"
@@ -418,12 +409,12 @@ then
     check_if_successful "mv" $?
   done
 
-  # Make things pretty
-  echo
-
   # Loop through the backup devices and verify the backups
   for device in "${backup_devices[@]}"
   do
+    # Make things pretty
+    echo
+
     # Update the user
     echo "Verifying \"${device_backup_file_map["$device"]}\" backup file containing \"$device\"" \
       "device backup ..."
@@ -439,14 +430,11 @@ then
     fi
 
     # Check if verifying the backup failed
-    if [[ $? -eq 1 ]]
+    if (( $? != 0 ))
     then
       echo "An error has occurred verifying the backup."
       exit 1
     fi
-
-    # Make things pretty
-    echo
 
     # Print the verification hash
     echo "SHA1 hash for the restored content of \"${device_backup_file_map["$device"]}\"" \
@@ -467,17 +455,20 @@ then
   # Check if fast mode is disabled
   if (( $fast_mode == 0 ))
   then
-    # Make things pretty
-    echo
-
     # Loop through the backup devices and compute the backup file hashes
     for device in "${backup_devices[@]}"
     do
+      # Make things pretty
+      echo
+
       # Update the user
       echo "Re-computing \"${device_backup_file_map["$device"]}\" backup file hash ..."
 
-      # Compute the backup file hash by running the hash command and keep just the hash
+      # Compute the backup file hash by running the hash command
       hash="$(sha1sum "${device_backup_file_map["$device"]}")"
+      check_if_successful "sha1sum" $?
+
+      # Keep just the hash
       hash="${hash%% *}"
 
       # Print the hash
@@ -507,6 +498,7 @@ then
       do
         # Run the hash comand
         sha1sum $device &
+        check_if_successful "sha1sum" $?
       done
     )
 
