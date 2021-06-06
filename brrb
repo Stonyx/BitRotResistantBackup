@@ -35,7 +35,7 @@ function check_if_successful()
   # Check if the command was not successful
   if (( $exit_code != 0 ))
   then
-    echo "Command $command failed." >&2
+    echo "An error occurred running $command command." >&2
     exit 1
   fi
 }
@@ -52,7 +52,7 @@ function perform_backup()
   local device_name="${device##*/}"
 
   # Perform the backup
-  ./ddinc -b "$device" -o "$location/$device_name.dd.xz" \
+  "$ddinc" -b "$device" -o "$location/$device_name.dd.xz" \
     -d "bs=1M iflag=fullblock status=progress" -c -x "-$compression_level -T 0"
 
   # Check if performing the backup failed
@@ -87,7 +87,7 @@ function perform_backup_with_dependees()
     #       much the data can shift and still be considered the same) along with disabling
     #       compression, secondary compression, and small string matching compression to
     #       significantly improve the speed of xdelta3
-    ./ddinc -i "$dependee_location/$device_name.dd.xz" -b "$device" \
+    "$ddinc" -i "$dependee_location/$device_name.dd.xz" -b "$device" \
       -o "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" \
       -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0"
 
@@ -102,15 +102,13 @@ function perform_backup_with_dependees()
     realpath --no-symlinks --relative-to="$location" \
       "$dependee_location/$device_name.dd.xz" > "$location/$device_name.dd.dependees"
   else
-    # TODO: check how different bs settings impact performance
-
     # Perform the backup
     # Note: since data on devices usually doesn't move only a few megabytes from it's original
     #       location we are using the smallest possible source window size (which determines how
     #       much the data can shift and still be considered the same) along with disabling
     #       compression, secondary compression, and small string matching compression to
     #       significantly improve the speed of xdelta3
-    ./ddinc -f "$dependee_location/$device_name.dd.dependees" \
+    "$ddinc" -f "$dependee_location/$device_name.dd.dependees" \
       -i "$dependee_location/$device_name.dd.xdelta3.xz" -b "$device" \
       -o "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" \
       -l "-B 524288 -0 -S none -N" -c -x "-$compression_level -T 0"
@@ -150,7 +148,7 @@ function verify_backup()
   # Note: the command after the semi colon is an if statement that checks if the exit codes from
   #       both commands involved in the pipe are 0 and it's this command's exit code that is
   #       checked afterwards
-  local hash="$(./ddinc -r "$location/$device_name.dd.xz" \
+  local hash="$("$ddinc" -r "$location/$device_name.dd.xz" \
     -d "bs=1M iflag=fullblock status=progress" -c | sha1sum; [[ "\${PIPESTATUS[@]}" == "0 0" ]])"
 
   # Check if verifying the backup failed
@@ -178,7 +176,7 @@ function verify_backup_with_dependees()
   # Note: the command after the semi colon is an if statement that checks if the exit codes from
   #       both commands involved in the pipe are 0 and it's this command's exit code that is
   #       checked afterwards
-  local hash="$(./ddinc -f "$location/$device_name.dd.dependees" \
+  local hash="$("$ddinc" -f "$location/$device_name.dd.dependees" \
     -r "$location/$device_name.dd.xdelta3.xz" -d "bs=1M iflag=fullblock status=progress" -c | \
     sha1sum; [[ "\${PIPESTATUS[@]}" == "0 0" ]])"
   
@@ -252,6 +250,28 @@ check_if_available "realpath"
 check_if_available "rm"
 check_if_available "par2"
 check_if_available "sha1sum"
+
+# Get the path this script is located in (without relying on dirname command)
+declare brrb_path
+if [[ "$BASH_SOURCE" != *"/"* ]]
+then
+  brrb_path="."
+else
+  brrb_path="${BASH_SOURCE%/*}"
+fi
+
+# Declare needed variables
+declare ddinc="$brrb_path/ddinc"
+
+# Check if the ddinc script is not located in the script's path
+if [[ ! -e "$ddinc" || ! -f "$ddinc" || ! -x "$ddinc" ]]
+then
+  # Check if ddinc is available as a command in the path
+  check_if_available "ddinc"
+
+  # Use ddinc as a command in the path
+  ddinc="ddinc"
+fi
 
 # Make sure a backup device or a restore device was specified and not both
 if (( ${#backup_devices[@]} == 0 && ${#restore_devices[@]} == 0 ))
@@ -339,10 +359,8 @@ then
   # Loop through the backup devices and perform the backups
   for device in "${backup_devices[@]}"
   do
-    # Make things pretty
-    echo
- 
     # Update the user
+    echo
     echo "Backing up \"$device\" device ..."
 
     # Check if there is no dependee for this backup
@@ -366,10 +384,8 @@ then
       exit 1
     fi
 
-    # Make things pretty
-    echo
-
     # Update the user
+    echo
     echo "Computing \"${device_backup_file_map["$device"]}\" backup file hash ..."
 
     # Compute the backup file hash by running the hash command
@@ -387,15 +403,12 @@ then
   # Loop through the devices and generate par2 files
   for device in "${backup_devices[@]}"
   do
-    # Make things pretty
-    echo
-
     # Update the user
+    echo
     echo "Generating par2 file for \"${device_backup_file_map["$device"]}\" backup file ..."
 
     # Generate the par2 file
-    # TODO: check if $location will work with par2 if it's . or ..
-    par2 create -b1000 -c50 -n1 -B"$location" "${device_backup_file_map["$device"]}.par2" \
+    par2 create -b1000 -c50 -n1 -B"$location/" "${device_backup_file_map["$device"]}.par2" \
       "${device_backup_file_map["$device"]}"
     check_if_successful "par2" $?
 
@@ -412,10 +425,8 @@ then
   # Loop through the backup devices and verify the backups
   for device in "${backup_devices[@]}"
   do
-    # Make things pretty
-    echo
-
     # Update the user
+    echo
     echo "Verifying \"${device_backup_file_map["$device"]}\" backup file containing \"$device\"" \
       "device backup ..."
 
@@ -458,10 +469,8 @@ then
     # Loop through the backup devices and compute the backup file hashes
     for device in "${backup_devices[@]}"
     do
-      # Make things pretty
-      echo
-
       # Update the user
+      echo
       echo "Re-computing \"${device_backup_file_map["$device"]}\" backup file hash ..."
 
       # Compute the backup file hash by running the hash command
@@ -485,10 +494,8 @@ then
       fi
     done
 
-    # Make things pretty
-    echo
-
     # Update the user
+    echo
     echo "Re-computing device hashes ..."
 
     # Asynchronously compute the device hashes and store them in an array
