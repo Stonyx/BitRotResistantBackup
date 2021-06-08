@@ -15,6 +15,12 @@
 # http://www.gnu.org/copyleft/gpl.html or write to The Free Software Foundation, 675 Mass Ave,
 # Cambridge, MA 02139, USA.
 
+# Enable checking for undefined variables
+set -o nounset
+
+# Prevent accidental file overwriting
+set -o noclobber
+
 # Create a function called to check if a required command is available
 function check_if_available()
 {
@@ -211,7 +217,7 @@ declare -i compression_level=0
 declare -i fast_mode=0
 
 # Get the options
-while getopts "b:r:l:d:0123456789fh" option
+while getopts "b:r:o:i:d:0123456789fh" option
 do
   case $option in
     b)
@@ -220,7 +226,7 @@ do
     r)
       restore_devices+=("$OPTARG")
       ;;
-    l)
+    [oi])
       backup_directory="${OPTARG%/}"
       ;;
     d)
@@ -233,20 +239,21 @@ do
       fast_mode=1
       ;;
     h)
-      echo "Usage: brrb (-b device | -r device) -l directory [-d directory] [-0..9] [-f]"
+      echo "Usage: brrb (-b device -o directory | -r device -i directory) [-d directory] [-0..9] [-f]"
       echo
       echo "-b    device to backup (can be specified multiple times)"
       echo "-r    device to restore (can be specified multiple times)"
-      echo "-l    backup directory"
+      echo "-o    backup output directory"
+      echo "-i    backup input directory"
       echo "-d    backup dependee directory"
       echo "-0..9 compression level (default is 0)"
       echo "-f    fast mode that skips re-computing hashes"
       echo
       echo "Backup example"
-      echo "brrb -b /dev/sda -b /dev/sdb -l ./backup/february -d ./backup/january"
+      echo "brrb -b /dev/sda -b /dev/sdb -o ./backup/february -d ./backup/january"
       echo
       echo "Restore example"
-      echo "brrb -r /dev/sda -r /dev/sdb -l ./backup/february"
+      echo "brrb -r /dev/sda -r /dev/sdb -i ./backup/february"
 
       exit 0
       ;;
