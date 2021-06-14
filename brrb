@@ -64,7 +64,8 @@ function perform_backup()
   # Perform the backup and redirect stdout to stderr so as not to interfere with the return
   #   value this function
   "$ddinc" -b "$device" -o "$backup_directory/$device_name.dd.xz" \
-    -d "bs=1M iflag=fullblock status=progress" -c -x "-$compression_level -T 0" 1>&2
+    -d "bs=1M iflag=fullblock status=progress" -c \
+    -x "-$compression_level -T $compression_threads -M $compression_memory" 1>&2
 
   # Check if performing the backup failed
   if (( $? != 0 ))
@@ -102,7 +103,7 @@ function perform_backup_with_dependees()
     "$ddinc" -i "$dependee_directory/$device_name.dd.xz" -b "$device" \
       -o "$backup_directory/$device_name.dd.xdelta3.xz" \
       -d "bs=1M iflag=fullblock status=progress" -l "-B 524288 -0 -S none -N" -c \
-      -x "-$compression_level -T 0" 1>&2
+      -x "-$compression_level -T $compression_threads -M $compression_memory" 1>&2
 
     # Check if performing the backup failed
     if (( $? != 0 ))
@@ -127,7 +128,7 @@ function perform_backup_with_dependees()
       -i "$dependee_directory/$device_name.dd.xdelta3.xz" -b "$device" \
       -o "$backup_directory/$device_name.dd.xdelta3.xz" \
       -d "bs=1M iflag=fullblock status=progress" -l "-B 524288 -0 -S none -N" -c \
-      -x "-$compression_level -T 0" 1>&2
+      -x "-$compression_level -T $compression_threads -M $compression_memory" 1>&2
 
     # Check if performing the backup failed
     if (( $? != 0 ))
@@ -214,10 +215,12 @@ declare -a restore_devices=()
 declare backup_directory=""
 declare dependee_directory=""
 declare -i compression_level=0
+declare -i compression_threads=0
+declare compression_memory="0"
 declare -i fast_mode=0
 
 # Get the options
-while getopts "b:r:o:i:d:0123456789fh" option
+while getopts "b:r:o:i:d:0123456789t:m:fh" option
 do
   case $option in
     b)
@@ -235,18 +238,27 @@ do
     [0-9])
       compression_level=$option
       ;;
+    t)
+      compression_threads=$OPTARG
+      ;;
+    m)
+      compression_memory="$OPTARG"
+      ;;
     f)
       fast_mode=1
       ;;
     h)
-      echo "Usage: brrb (-b device -o directory | -r device -i directory) [-d directory] [-0..9] [-f]"
+      echo "Usage: brrb (-b device -o directory | -r device -i directory) [-d directory] [-0..9]" \
+        "[-t threads] [-m memory] [-f]"
       echo
       echo "-b    device to backup (can be specified multiple times)"
       echo "-r    device to restore (can be specified multiple times)"
       echo "-o    backup output directory"
       echo "-i    backup input directory"
       echo "-d    backup dependee directory"
-      echo "-0..9 compression level (default is 0)"
+      echo "-0..9 compression level (default is 0 which is approximately equal to gzip level 9)"
+      echo "-t    number of threads to use during compression (default is 0 which is autodetect)"
+      echo "-m    how much memory to use during compression (default is 0 which is unlimited)"
       echo "-f    fast mode that skips re-computing hashes"
       echo
       echo "Backup example"
@@ -329,7 +341,7 @@ then
       -e "$backup_directory/$device_name.dd.xdelta3.xz.par2" || \
       -e "$backup_directory/$device_name.dd.xdelta3.xz.vol00+50.par2")) ]]
     then
-      echo "One or more backup files already exist in the specified backup directory." >&2
+      echo "One or more backup files already exist in specified backup directory." >&2
       exit 1
     fi
   done
@@ -361,8 +373,8 @@ then
   for device in "${backup_devices[@]}"
   do
     # Print the device hash by retrieving it from the file
-    echo "SHA1 hash for \"$device\" device is"
-    echo "$(< "$backup_directory/${device##*/}.dd.sha1")"
+    echo "SHA1 hash for \"$device\" device is $(< "$backup_directory/${device##*/}.dd.sha1")"
+    echo "and has been saved to \"$backup_directory/${device##*/}.dd.sha1\" file."
   done
 
   # Declare needed variables
@@ -392,7 +404,7 @@ then
     # Check if performing the backup failed
     if (( $? != 0 ))
     then
-      echo "An error has occurred performing the backup." >&2
+      echo "An error has occurred performing backup." >&2
       exit 1
     fi
 
@@ -408,8 +420,8 @@ then
     echo -n "${hash%% *}" > "${device_backup_file_map["$device"]}.sha1"
 
     # Print the backup file hash by retrieving it from the file
-    echo "SHA1 hash for \"${device_backup_file_map["$device"]}\" backup file is"
-    echo "$(< "${device_backup_file_map["$device"]}.sha1")"
+    echo "SHA1 hash for backup file is $(< "${device_backup_file_map["$device"]}.sha1")"
+    echo "and has been saved to \"${device_backup_file_map["$device"]}.sha1\" file."
   done
 
   # Loop through the devices and generate par2 files
@@ -455,21 +467,19 @@ then
     # Check if verifying the backup failed
     if (( $? != 0 ))
     then
-      echo "An error has occurred verifying the backup."
+      echo "An error has occurred verifying backup."
       exit 1
     fi
 
     # Print the verification hash
-    echo "SHA1 hash for the restored content of \"${device_backup_file_map["$device"]}\"" \
-      "backup file is"
-    echo "$hash"
+    echo "SHA1 hash for restored content of backup file is $hash"
 
     # Check if the verification hash matches the device hash
     if [[ "$hash" == "$(< "$backup_directory/${device##*/}.dd.sha1")" ]]
     then
-      echo "which matches the \"$device\" device hash."
+      echo "which matches \"$device\" device hash."
     else
-      echo "which does NOT match the \"$device\" device hash."
+      echo "which does NOT match \"$device\" device hash."
       echo "An error has occurred." >&2
       exit 1
     fi
@@ -493,15 +503,14 @@ then
       hash="${hash%% *}"
 
       # Print the hash
-      echo "SHA1 hash for \"${device_backup_file_map["$device"]}\" backup file is"
-      echo "$hash"
+      echo "SHA1 hash for backup file is $hash"
 
       # Check if the hash matches the hash stored in the file
       if [[ "$hash" == "$(< "${device_backup_file_map["$device"]}.sha1")" ]]
       then
-        echo "which matches the original hash."
+        echo "which matches original hash."
       else
-        echo "which does NOT match the original hash."
+        echo "which does NOT match original hash."
         echo "An error has occurred." >&2
       fi
     done
@@ -532,15 +541,14 @@ then
     for device in "${backup_devices[@]}"
     do    
       # Print the hash
-      echo "SHA1 hash for \"$device\" device is"
-      echo "${device_hash_map["$device"]}"
+      echo "SHA1 hash for \"$device\" device is ${device_hash_map["$device"]}"
 
       # Check if the hash matches the hash stored in the file
       if [[ "${device_hash_map["$device"]}" == "$(< "$backup_directory/${device##*/}.dd.sha1")" ]]
       then
-        echo "which matches the original hash."
+        echo "which matches original hash."
       else
-        echo "which does NOT match the original hash."
+        echo "which does NOT match original hash."
         echo "An error has occurred." >&2
       fi
     done
